@@ -19,6 +19,9 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 - Dance effects control (0-100) to add motion/color energy for dance-style edits.
 - Dance mode presets: Auto, Soft, Hard, Off.
 - Audio remix modes: Original, Nightcore, Slow Jam, Hyper Dance.
+- Auto-edits to the beat (reads TBPM tag when available, otherwise BPM fallback).
+- Instant VFX toggle (noise/sharpen/shake style one-click effects).
+- 10x faster draft mode for rough-cut turnaround (faster encode preset).
 
 ## Requirements
 - Python 3.10+

@@ -35,6 +35,10 @@ class RenderSettings:
     dance_intensity: int
     dance_mode: str
     remix_mode: str
+    auto_beat_sync: bool
+    bpm: float
+    instant_vfx: bool
+    fast_mode: bool
     use_all_audio: bool
     random_seed: int | None
 
@@ -61,6 +65,32 @@ def probe_duration(ffprobe_path: str, media_path: str) -> float:
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed for {media_path}: {result.stderr.strip()}")
     return max(0.0, float(result.stdout.strip() or "0"))
+
+
+def probe_bpm_hint(ffprobe_path: str, media_path: str) -> float | None:
+    cmd = [
+        ffprobe_path,
+        "-v",
+        "error",
+        "-show_entries",
+        "format_tags=TBPM",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        media_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        return None
+    raw = result.stdout.strip()
+    if not raw:
+        return None
+    try:
+        bpm = float(raw)
+    except ValueError:
+        return None
+    if 40 <= bpm <= 240:
+        return bpm
+    return None
 
 
 def gather_videos(selected_files, selected_folders, recursive=True):
@@ -150,6 +180,12 @@ def build_video_filter(settings: RenderSettings, clip_len: float) -> str:
         filters.append(f"fade=t=in:st=0:d={fade_dur:.3f}")
         filters.append(f"fade=t=out:st={fade_out_start:.3f}:d={fade_dur:.3f}")
 
+    if settings.instant_vfx:
+        filters.append("noise=alls=6:allf=t")
+        filters.append("unsharp=5:5:0.6:5:5:0.0")
+        if settings.dance_mode != "Off":
+            filters.append("rotate=0.007*sin(2*PI*t*4):fillcolor=black")
+
     return ",".join(filters)
 
 
@@ -170,14 +206,27 @@ def run_auto_edit(ffmpeg_path: str, ffprobe_path: str, videos: list[str], audios
             audios=audios,
             use_all_audio=settings.use_all_audio,
         )
+        bpm_hint = probe_bpm_hint(ffprobe_path, audio_path)
+        beat_bpm = bpm_hint if bpm_hint else settings.bpm
+        beat_len = 60.0 / max(1.0, beat_bpm)
 
         target_duration = max(audio_duration, settings.total_clips * settings.max_clip_duration)
         concat_file = temp_path / "video_concat.txt"
         segment_files = []
+        src_durations: dict[str, float] = {}
         for idx in range(settings.total_clips):
             source_video = random.choice(videos)
-            src_duration = probe_duration(ffprobe_path, source_video)
-            if settings.dance_mode == "Auto":
+            if source_video in src_durations:
+                src_duration = src_durations[source_video]
+            else:
+                src_duration = probe_duration(ffprobe_path, source_video)
+                src_durations[source_video] = src_duration
+
+            if settings.auto_beat_sync:
+                beats_per_cut = random.choice([1, 2, 4])
+                desired = beat_len * beats_per_cut
+                desired = max(settings.min_clip_duration, min(settings.max_clip_duration, desired))
+            elif settings.dance_mode == "Auto":
                 midpoint = (settings.min_clip_duration + settings.max_clip_duration) / 2.0
                 desired = random.triangular(settings.min_clip_duration, settings.max_clip_duration, midpoint * 0.75)
             else:
@@ -203,9 +252,9 @@ def run_auto_edit(ffmpeg_path: str, ffprobe_path: str, videos: list[str], audios
                     "-c:v",
                     "libx264",
                     "-preset",
-                    "veryfast",
+                    "ultrafast" if settings.fast_mode else "veryfast",
                     "-crf",
-                    str(settings.crf),
+                    str(min(30, settings.crf + 4) if settings.fast_mode else settings.crf),
                     "-pix_fmt",
                     "yuv420p",
                     str(segment_file),
@@ -233,9 +282,9 @@ def run_auto_edit(ffmpeg_path: str, ffprobe_path: str, videos: list[str], audios
                 "-c:v",
                 "libx264",
                 "-preset",
-                "veryfast",
+                "ultrafast" if settings.fast_mode else "veryfast",
                 "-crf",
-                str(settings.crf),
+                str(min(30, settings.crf + 4) if settings.fast_mode else settings.crf),
                 "-pix_fmt",
                 "yuv420p",
                 str(stitched),
@@ -313,6 +362,10 @@ class AutoEditApp(tk.Tk):
         self.dance_intensity = tk.StringVar(value="60")
         self.dance_mode = tk.StringVar(value="Auto")
         self.remix_mode = tk.StringVar(value="Original")
+        self.auto_beat_sync = tk.BooleanVar(value=True)
+        self.bpm = tk.StringVar(value="120")
+        self.instant_vfx = tk.BooleanVar(value=True)
+        self.fast_mode = tk.BooleanVar(value=True)
         self.use_all_audio = tk.BooleanVar(value=True)
         self.scan_recursive = tk.BooleanVar(value=True)
 
@@ -329,7 +382,7 @@ class AutoEditApp(tk.Tk):
         ).pack(anchor="w")
         ttk.Label(
             root,
-            text="Windows 8.1 friendly GUI: multi-video + multi-folder + multi-audio auto music-video builder.",
+            text="Windows 8.1 friendly GUI: AI-style beat sync + instant VFX + multi-source auto music-video builder.",
         ).pack(anchor="w", pady=(0, 10))
 
         tool_frame = ttk.LabelFrame(root, text="FFmpeg Tools", padding=10)
@@ -365,6 +418,9 @@ class AutoEditApp(tk.Tk):
             text="Use all audio files (shuffle + combine)",
             variable=self.use_all_audio,
         ).pack(anchor="w", pady=(6, 0))
+        ttk.Checkbutton(audio_frame, text="10x faster draft mode (AI rough cut)", variable=self.fast_mode).pack(anchor="w", pady=(2, 0))
+        ttk.Checkbutton(audio_frame, text="Instant VFX", variable=self.instant_vfx).pack(anchor="w", pady=(2, 0))
+        ttk.Checkbutton(audio_frame, text="Auto-edit to beat", variable=self.auto_beat_sync).pack(anchor="w", pady=(2, 0))
 
         self.audio_list = tk.Listbox(audio_frame, height=14)
         self.audio_list.pack(fill="both", expand=True, pady=(8, 0))
@@ -382,6 +438,7 @@ class AutoEditApp(tk.Tk):
         self._simple_entry(settings, "Random seed", self.seed, 2, 2)
         self._simple_entry(settings, "Transition sec", self.transition_duration, 3, 0)
         self._simple_entry(settings, "Dance intensity (0-100)", self.dance_intensity, 3, 2)
+        self._simple_entry(settings, "BPM fallback", self.bpm, 3, 4)
 
         ttk.Label(settings, text="Style preset").grid(row=2, column=4, sticky="w", padx=6, pady=5)
         ttk.Combobox(
@@ -530,6 +587,9 @@ class AutoEditApp(tk.Tk):
             raise ValueError("Invalid dance mode.")
         if self.remix_mode.get() not in {"Original", "Nightcore", "Slow Jam", "Hyper Dance"}:
             raise ValueError("Invalid remix mode.")
+        bpm = float(self.bpm.get())
+        if bpm < 40 or bpm > 240:
+            raise ValueError("BPM fallback must be between 40 and 240.")
 
         seed = int(self.seed.get()) if self.seed.get().strip() else None
         return RenderSettings(
@@ -546,6 +606,10 @@ class AutoEditApp(tk.Tk):
             dance_intensity=dance_intensity,
             dance_mode=self.dance_mode.get(),
             remix_mode=self.remix_mode.get(),
+            auto_beat_sync=self.auto_beat_sync.get(),
+            bpm=bpm,
+            instant_vfx=self.instant_vfx.get(),
+            fast_mode=self.fast_mode.get(),
             use_all_audio=self.use_all_audio.get(),
             random_seed=seed,
         )
