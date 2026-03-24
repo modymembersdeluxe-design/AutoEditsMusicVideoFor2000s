@@ -33,6 +33,8 @@ class RenderSettings:
     transition_mode: str
     transition_duration: float
     dance_intensity: int
+    dance_mode: str
+    remix_mode: str
     use_all_audio: bool
     random_seed: int | None
 
@@ -129,6 +131,12 @@ def build_video_filter(settings: RenderSettings, clip_len: float) -> str:
     ]
 
     dance_strength = max(0.0, min(1.0, settings.dance_intensity / 100.0))
+    if settings.dance_mode == "Off":
+        dance_strength = 0.0
+    elif settings.dance_mode == "Soft":
+        dance_strength = min(dance_strength, 0.45)
+    elif settings.dance_mode == "Hard":
+        dance_strength = max(dance_strength, 0.75)
     if dance_strength > 0:
         rot_amt = 0.006 + (0.02 * dance_strength)
         hue_amt = 4 + (14 * dance_strength)
@@ -169,7 +177,11 @@ def run_auto_edit(ffmpeg_path: str, ffprobe_path: str, videos: list[str], audios
         for idx in range(settings.total_clips):
             source_video = random.choice(videos)
             src_duration = probe_duration(ffprobe_path, source_video)
-            desired = random.uniform(settings.min_clip_duration, settings.max_clip_duration)
+            if settings.dance_mode == "Auto":
+                midpoint = (settings.min_clip_duration + settings.max_clip_duration) / 2.0
+                desired = random.triangular(settings.min_clip_duration, settings.max_clip_duration, midpoint * 0.75)
+            else:
+                desired = random.uniform(settings.min_clip_duration, settings.max_clip_duration)
             clip_len = max(0.15, min(desired, src_duration if src_duration > 0 else desired))
             max_start = max(0.0, src_duration - clip_len)
             start = random.uniform(0.0, max_start) if max_start > 0 else 0.0
@@ -231,33 +243,45 @@ def run_auto_edit(ffmpeg_path: str, ffprobe_path: str, videos: list[str], audios
             "Failed to stitch generated clips.",
         )
 
-        run_cmd(
+        remix_af = None
+        if settings.remix_mode == "Nightcore":
+            remix_af = "asetrate=44100*1.08,aresample=44100,atempo=1.06,bass=g=2"
+        elif settings.remix_mode == "Slow Jam":
+            remix_af = "atempo=0.92,volume=1.1,bass=g=3"
+        elif settings.remix_mode == "Hyper Dance":
+            remix_af = "asetrate=44100*1.12,aresample=44100,atempo=1.08,treble=g=2,bass=g=2"
+
+        mux_cmd = [
+            ffmpeg_path,
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            audio_path,
+            "-i",
+            str(stitched),
+            "-map",
+            "1:v:0",
+            "-map",
+            "0:a:0",
+            "-t",
+            f"{target_duration:.3f}",
+            "-c:v",
+            "copy",
+        ]
+        if remix_af:
+            mux_cmd.extend(["-af", remix_af])
+        mux_cmd.extend(
             [
-                ffmpeg_path,
-                "-y",
-                "-stream_loop",
-                "-1",
-                "-i",
-                audio_path,
-                "-i",
-                str(stitched),
-                "-map",
-                "1:v:0",
-                "-map",
-                "0:a:0",
-                "-t",
-                f"{target_duration:.3f}",
-                "-c:v",
-                "copy",
                 "-c:a",
                 "aac",
                 "-b:a",
                 "192k",
                 "-shortest",
                 output_file,
-            ],
-            "Final mux failed.",
+            ]
         )
+        run_cmd(mux_cmd, "Final mux failed.")
 
 
 class AutoEditApp(tk.Tk):
@@ -287,6 +311,8 @@ class AutoEditApp(tk.Tk):
         self.transition_mode = tk.StringVar(value="Fade")
         self.transition_duration = tk.StringVar(value="0.25")
         self.dance_intensity = tk.StringVar(value="60")
+        self.dance_mode = tk.StringVar(value="Auto")
+        self.remix_mode = tk.StringVar(value="Original")
         self.use_all_audio = tk.BooleanVar(value=True)
         self.scan_recursive = tk.BooleanVar(value=True)
 
@@ -373,6 +399,22 @@ class AutoEditApp(tk.Tk):
             state="readonly",
             width=22,
         ).grid(row=3, column=5, sticky="w", padx=6, pady=5)
+        ttk.Label(settings, text="Dance mode").grid(row=4, column=0, sticky="w", padx=6, pady=5)
+        ttk.Combobox(
+            settings,
+            textvariable=self.dance_mode,
+            values=["Auto", "Soft", "Hard", "Off"],
+            state="readonly",
+            width=20,
+        ).grid(row=4, column=1, sticky="w", padx=6, pady=5)
+        ttk.Label(settings, text="Audio remix mode").grid(row=4, column=2, sticky="w", padx=6, pady=5)
+        ttk.Combobox(
+            settings,
+            textvariable=self.remix_mode,
+            values=["Original", "Nightcore", "Slow Jam", "Hyper Dance"],
+            state="readonly",
+            width=20,
+        ).grid(row=4, column=3, sticky="w", padx=6, pady=5)
 
         output_frame = ttk.LabelFrame(root, text="Output", padding=10)
         output_frame.pack(fill="x", pady=6)
@@ -484,6 +526,10 @@ class AutoEditApp(tk.Tk):
         dance_intensity = int(self.dance_intensity.get())
         if not (0 <= dance_intensity <= 100):
             raise ValueError("Dance intensity must be between 0 and 100.")
+        if self.dance_mode.get() not in {"Auto", "Soft", "Hard", "Off"}:
+            raise ValueError("Invalid dance mode.")
+        if self.remix_mode.get() not in {"Original", "Nightcore", "Slow Jam", "Hyper Dance"}:
+            raise ValueError("Invalid remix mode.")
 
         seed = int(self.seed.get()) if self.seed.get().strip() else None
         return RenderSettings(
@@ -498,6 +544,8 @@ class AutoEditApp(tk.Tk):
             transition_mode=self.transition_mode.get(),
             transition_duration=transition_duration,
             dance_intensity=dance_intensity,
+            dance_mode=self.dance_mode.get(),
+            remix_mode=self.remix_mode.get(),
             use_all_audio=self.use_all_audio.get(),
             random_seed=seed,
         )

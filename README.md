@@ -17,6 +17,8 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 - Style presets: Clean 2000s, VHS Deluxe, CRT Glow, Lo‑Fi Old Net.
 - Transition modes: Fade or Cut (with adjustable transition seconds).
 - Dance effects control (0-100) to add motion/color energy for dance-style edits.
+- Dance mode presets: Auto, Soft, Hard, Off.
+- Audio remix modes: Original, Nightcore, Slow Jam, Hyper Dance.
 
 ## Requirements
 - Python 3.10+
