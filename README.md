@@ -35,6 +35,10 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 python autoedit_gui.py
 ```
 
+## Windows 8.1 tutorials
+- `tutorial setup python windows 8.1 autoeditsmusicvideofor2000s.md`
+- `tutorial python windows 8.1 autoeditsmusicvideofor2000s.md`
+
 ## Windows 8.1 notes
 - Tkinter ships with most normal Windows Python installs.
 - Use ffmpeg.exe / ffprobe.exe binaries that run on your machine.
