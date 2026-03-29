@@ -6,6 +6,7 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -39,15 +40,32 @@ class RenderSettings:
     bpm: float
     instant_vfx: bool
     fast_mode: bool
+    auto_speed_ramp: bool
+    speed_min: float
+    speed_max: float
+    intro_clip_count: int
+    outro_clip_count: int
+    loop_chance: int
+    reverse_chance: int
+    stutter_chance: int
     use_all_audio: bool
-    random_seed: int | None
+    random_seed: Optional[int]
 
 
-def run_cmd(cmd: list[str], error_label: str):
+def run_cmd(cmd: List[str], error_label: str):
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"{error_label}\n{result.stderr.strip()}")
     return result
+
+
+def verify_tool(tool_path: str, tool_name: str):
+    try:
+        result = subprocess.run([tool_path, "-version"], capture_output=True, text=True)
+    except OSError as exc:
+        raise RuntimeError(f"{tool_name} is not executable: {tool_path}") from exc
+    if result.returncode != 0:
+        raise RuntimeError(f"{tool_name} failed to run. Please select a valid {tool_name} executable.")
 
 
 def probe_duration(ffprobe_path: str, media_path: str) -> float:
@@ -67,7 +85,7 @@ def probe_duration(ffprobe_path: str, media_path: str) -> float:
     return max(0.0, float(result.stdout.strip() or "0"))
 
 
-def probe_bpm_hint(ffprobe_path: str, media_path: str) -> float | None:
+def probe_bpm_hint(ffprobe_path: str, media_path: str) -> Optional[float]:
     cmd = [
         ffprobe_path,
         "-v",
@@ -116,7 +134,7 @@ def gather_videos(selected_files, selected_folders, recursive=True):
     return sorted(found)
 
 
-def _build_audio_source(ffmpeg_path: str, ffprobe_path: str, temp_dir: Path, audios: list[str], use_all_audio: bool) -> tuple[str, float]:
+def _build_audio_source(ffmpeg_path: str, ffprobe_path: str, temp_dir: Path, audios: List[str], use_all_audio: bool) -> Tuple[str, float]:
     if not use_all_audio or len(audios) == 1:
         pick = random.choice(audios)
         return pick, probe_duration(ffprobe_path, pick)
@@ -189,7 +207,16 @@ def build_video_filter(settings: RenderSettings, clip_len: float) -> str:
     return ",".join(filters)
 
 
-def run_auto_edit(ffmpeg_path: str, ffprobe_path: str, videos: list[str], audios: list[str], output_file: str, settings: RenderSettings):
+def run_auto_edit(
+    ffmpeg_path: str,
+    ffprobe_path: str,
+    videos: List[str],
+    audios: List[str],
+    output_file: str,
+    settings: RenderSettings,
+    intro_videos: Optional[List[str]] = None,
+    outro_videos: Optional[List[str]] = None,
+):
     if settings.random_seed is not None:
         random.seed(settings.random_seed)
     if not videos:
@@ -213,9 +240,19 @@ def run_auto_edit(ffmpeg_path: str, ffprobe_path: str, videos: list[str], audios
         target_duration = max(audio_duration, settings.total_clips * settings.max_clip_duration)
         concat_file = temp_path / "video_concat.txt"
         segment_files = []
-        src_durations: dict[str, float] = {}
+        src_durations: Dict[str, float] = {}
+        intro_pool = intro_videos or []
+        outro_pool = outro_videos or []
+        intro_count = min(settings.intro_clip_count, settings.total_clips)
+        outro_count = min(settings.outro_clip_count, max(0, settings.total_clips - intro_count))
+
         for idx in range(settings.total_clips):
-            source_video = random.choice(videos)
+            if idx < intro_count and intro_pool:
+                source_video = random.choice(intro_pool)
+            elif idx >= settings.total_clips - outro_count and outro_pool:
+                source_video = random.choice(outro_pool)
+            else:
+                source_video = random.choice(videos)
             if source_video in src_durations:
                 src_duration = src_durations[source_video]
             else:
@@ -236,6 +273,15 @@ def run_auto_edit(ffmpeg_path: str, ffprobe_path: str, videos: list[str], audios
             start = random.uniform(0.0, max_start) if max_start > 0 else 0.0
             segment_file = temp_path / f"seg_{idx:05d}.mp4"
             vf = build_video_filter(settings=settings, clip_len=clip_len)
+            if settings.auto_speed_ramp:
+                speed = random.uniform(settings.speed_min, settings.speed_max)
+                vf = f"{vf},setpts=PTS/{speed:.3f}"
+            if random.randint(1, 100) <= settings.loop_chance:
+                vf = f"{vf},tpad=stop_mode=clone:stop_duration=0.15"
+            if random.randint(1, 100) <= settings.stutter_chance:
+                vf = f"{vf},framestep=2,fps={settings.fps}"
+            if random.randint(1, 100) <= settings.reverse_chance and clip_len <= 8:
+                vf = f"{vf},reverse"
             run_cmd(
                 [
                     ffmpeg_path,
@@ -341,6 +387,10 @@ class AutoEditApp(tk.Tk):
 
         self.video_files = []
         self.video_folders = []
+        self.intro_video_files = []
+        self.intro_video_folders = []
+        self.outro_video_files = []
+        self.outro_video_folders = []
         self.audio_files = []
 
         self.ffmpeg_path = tk.StringVar(value=shutil.which("ffmpeg") or "ffmpeg")
@@ -366,6 +416,14 @@ class AutoEditApp(tk.Tk):
         self.bpm = tk.StringVar(value="120")
         self.instant_vfx = tk.BooleanVar(value=True)
         self.fast_mode = tk.BooleanVar(value=True)
+        self.auto_speed_ramp = tk.BooleanVar(value=True)
+        self.speed_min = tk.StringVar(value="0.85")
+        self.speed_max = tk.StringVar(value="1.20")
+        self.intro_clip_count = tk.StringVar(value="4")
+        self.outro_clip_count = tk.StringVar(value="4")
+        self.loop_chance = tk.StringVar(value="25")
+        self.reverse_chance = tk.StringVar(value="12")
+        self.stutter_chance = tk.StringVar(value="20")
         self.use_all_audio = tk.BooleanVar(value=True)
         self.scan_recursive = tk.BooleanVar(value=True)
 
@@ -425,6 +483,29 @@ class AutoEditApp(tk.Tk):
         self.audio_list = tk.Listbox(audio_frame, height=14)
         self.audio_list.pack(fill="both", expand=True, pady=(8, 0))
 
+        io_frame = ttk.Frame(root)
+        io_frame.pack(fill="both", expand=True)
+
+        intro_frame = ttk.LabelFrame(io_frame, text="Intro Video Sources (optional)", padding=10)
+        intro_frame.pack(side="left", fill="both", expand=True, padx=(0, 5), pady=6)
+        ibtn = ttk.Frame(intro_frame)
+        ibtn.pack(fill="x")
+        ttk.Button(ibtn, text="Add Intro Files", command=self._add_intro_files).pack(side="left", padx=(0, 8))
+        ttk.Button(ibtn, text="Add Intro Folder", command=self._add_intro_folder).pack(side="left", padx=(0, 8))
+        ttk.Button(ibtn, text="Clear", command=self._clear_intro).pack(side="left")
+        self.intro_list = tk.Listbox(intro_frame, height=6)
+        self.intro_list.pack(fill="both", expand=True, pady=(8, 0))
+
+        outro_frame = ttk.LabelFrame(io_frame, text="Outro Video Sources (optional)", padding=10)
+        outro_frame.pack(side="left", fill="both", expand=True, padx=(5, 0), pady=6)
+        obtn = ttk.Frame(outro_frame)
+        obtn.pack(fill="x")
+        ttk.Button(obtn, text="Add Outro Files", command=self._add_outro_files).pack(side="left", padx=(0, 8))
+        ttk.Button(obtn, text="Add Outro Folder", command=self._add_outro_folder).pack(side="left", padx=(0, 8))
+        ttk.Button(obtn, text="Clear", command=self._clear_outro).pack(side="left")
+        self.outro_list = tk.Listbox(outro_frame, height=6)
+        self.outro_list.pack(fill="both", expand=True, pady=(8, 0))
+
         settings = ttk.LabelFrame(root, text="Deluxe Generation Settings", padding=10)
         settings.pack(fill="x", pady=6)
 
@@ -439,6 +520,13 @@ class AutoEditApp(tk.Tk):
         self._simple_entry(settings, "Transition sec", self.transition_duration, 3, 0)
         self._simple_entry(settings, "Dance intensity (0-100)", self.dance_intensity, 3, 2)
         self._simple_entry(settings, "BPM fallback", self.bpm, 3, 4)
+        self._simple_entry(settings, "Intro clips", self.intro_clip_count, 5, 0)
+        self._simple_entry(settings, "Outro clips", self.outro_clip_count, 5, 2)
+        self._simple_entry(settings, "Speed min", self.speed_min, 6, 0)
+        self._simple_entry(settings, "Speed max", self.speed_max, 6, 2)
+        self._simple_entry(settings, "Loop %", self.loop_chance, 7, 0)
+        self._simple_entry(settings, "Reverse %", self.reverse_chance, 7, 2)
+        self._simple_entry(settings, "Stutter %", self.stutter_chance, 7, 4)
 
         ttk.Label(settings, text="Style preset").grid(row=2, column=4, sticky="w", padx=6, pady=5)
         ttk.Combobox(
@@ -472,6 +560,7 @@ class AutoEditApp(tk.Tk):
             state="readonly",
             width=20,
         ).grid(row=4, column=3, sticky="w", padx=6, pady=5)
+        ttk.Checkbutton(settings, text="Auto speed fast+slow", variable=self.auto_speed_ramp).grid(row=6, column=4, columnspan=2, sticky="w", padx=6, pady=5)
 
         output_frame = ttk.LabelFrame(root, text="Output", padding=10)
         output_frame.pack(fill="x", pady=6)
@@ -522,6 +611,42 @@ class AutoEditApp(tk.Tk):
                 self.audio_files.append(file)
         self._refresh_audio_list()
 
+    def _add_intro_files(self):
+        files = filedialog.askopenfilenames(title="Select intro video files")
+        for file in files:
+            if file not in self.intro_video_files:
+                self.intro_video_files.append(file)
+        self._refresh_intro_list()
+
+    def _add_intro_folder(self):
+        folder = filedialog.askdirectory(title="Select intro video folder")
+        if folder and folder not in self.intro_video_folders:
+            self.intro_video_folders.append(folder)
+        self._refresh_intro_list()
+
+    def _clear_intro(self):
+        self.intro_video_files = []
+        self.intro_video_folders = []
+        self._refresh_intro_list()
+
+    def _add_outro_files(self):
+        files = filedialog.askopenfilenames(title="Select outro video files")
+        for file in files:
+            if file not in self.outro_video_files:
+                self.outro_video_files.append(file)
+        self._refresh_outro_list()
+
+    def _add_outro_folder(self):
+        folder = filedialog.askdirectory(title="Select outro video folder")
+        if folder and folder not in self.outro_video_folders:
+            self.outro_video_folders.append(folder)
+        self._refresh_outro_list()
+
+    def _clear_outro(self):
+        self.outro_video_files = []
+        self.outro_video_folders = []
+        self._refresh_outro_list()
+
     def _clear_audios(self):
         self.audio_files = []
         self._refresh_audio_list()
@@ -537,6 +662,20 @@ class AutoEditApp(tk.Tk):
         self.audio_list.delete(0, "end")
         for file in self.audio_files:
             self.audio_list.insert("end", file)
+
+    def _refresh_intro_list(self):
+        self.intro_list.delete(0, "end")
+        for file in self.intro_video_files:
+            self.intro_list.insert("end", f"FILE: {file}")
+        for folder in self.intro_video_folders:
+            self.intro_list.insert("end", f"FOLDER: {folder}")
+
+    def _refresh_outro_list(self):
+        self.outro_list.delete(0, "end")
+        for file in self.outro_video_files:
+            self.outro_list.insert("end", f"FILE: {file}")
+        for folder in self.outro_video_folders:
+            self.outro_list.insert("end", f"FOLDER: {folder}")
 
     def _pick_output(self):
         path = filedialog.asksaveasfilename(title="Output MP4", defaultextension=".mp4", filetypes=[("MP4 Video", "*.mp4")])
@@ -590,6 +729,22 @@ class AutoEditApp(tk.Tk):
         bpm = float(self.bpm.get())
         if bpm < 40 or bpm > 240:
             raise ValueError("BPM fallback must be between 40 and 240.")
+        speed_min = float(self.speed_min.get())
+        speed_max = float(self.speed_max.get())
+        if speed_min <= 0 or speed_max <= 0:
+            raise ValueError("Speed min/max must be greater than 0.")
+        if speed_min > speed_max:
+            raise ValueError("Speed min cannot exceed speed max.")
+        intro_clip_count = int(self.intro_clip_count.get())
+        outro_clip_count = int(self.outro_clip_count.get())
+        if intro_clip_count < 0 or outro_clip_count < 0:
+            raise ValueError("Intro/Outro clip count cannot be negative.")
+        loop_chance = int(self.loop_chance.get())
+        reverse_chance = int(self.reverse_chance.get())
+        stutter_chance = int(self.stutter_chance.get())
+        for label, value in {"Loop": loop_chance, "Reverse": reverse_chance, "Stutter": stutter_chance}.items():
+            if value < 0 or value > 100:
+                raise ValueError(f"{label} chance must be between 0 and 100.")
 
         seed = int(self.seed.get()) if self.seed.get().strip() else None
         return RenderSettings(
@@ -610,6 +765,14 @@ class AutoEditApp(tk.Tk):
             bpm=bpm,
             instant_vfx=self.instant_vfx.get(),
             fast_mode=self.fast_mode.get(),
+            auto_speed_ramp=self.auto_speed_ramp.get(),
+            speed_min=speed_min,
+            speed_max=speed_max,
+            intro_clip_count=intro_clip_count,
+            outro_clip_count=outro_clip_count,
+            loop_chance=loop_chance,
+            reverse_chance=reverse_chance,
+            stutter_chance=stutter_chance,
             use_all_audio=self.use_all_audio.get(),
             random_seed=seed,
         )
@@ -622,6 +785,8 @@ class AutoEditApp(tk.Tk):
             return
 
         videos = gather_videos(self.video_files, self.video_folders, recursive=self.scan_recursive.get())
+        intro_videos = gather_videos(self.intro_video_files, self.intro_video_folders, recursive=self.scan_recursive.get())
+        outro_videos = gather_videos(self.outro_video_files, self.outro_video_folders, recursive=self.scan_recursive.get())
         audios = [a for a in self.audio_files if Path(a).exists()]
         if not videos:
             messagebox.showerror("Missing Videos", "Please add at least one valid video file or folder.")
@@ -633,6 +798,12 @@ class AutoEditApp(tk.Tk):
         output = self.output_path.get().strip()
         if not output:
             messagebox.showerror("Missing Output", "Please choose output file path.")
+            return
+        try:
+            verify_tool(self.ffmpeg_path.get().strip(), "ffmpeg")
+            verify_tool(self.ffprobe_path.get().strip(), "ffprobe")
+        except RuntimeError as exc:
+            messagebox.showerror("FFmpeg/FFprobe Error", str(exc))
             return
 
         self.status.set("Generating deluxe music video... this can take time for super long videos.")
@@ -647,6 +818,8 @@ class AutoEditApp(tk.Tk):
                     audios=audios,
                     output_file=output,
                     settings=settings,
+                    intro_videos=intro_videos,
+                    outro_videos=outro_videos,
                 )
                 self.after(0, lambda output=output: self._done_success(output))
             except Exception as exc:

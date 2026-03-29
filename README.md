@@ -22,9 +22,12 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 - Auto-edits to the beat (reads TBPM tag when available, otherwise BPM fallback).
 - Instant VFX toggle (noise/sharpen/shake style one-click effects).
 - 10x faster draft mode for rough-cut turnaround (faster encode preset).
+- Intro/Outro source pools (optional) with dedicated intro/outro clip counts.
+- Auto speed ramp (fast + slow motion variation per clip).
+- Auto loop/reverse/stutter effects with per-effect chance controls.
 
 ## Requirements
-- Python 3.10+
+- Python 3.8+
 - FFmpeg + FFprobe available in PATH (or manually selected in GUI)
 
 ## Run
