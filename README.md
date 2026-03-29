@@ -35,6 +35,11 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 python autoedit_gui.py
 ```
 
+## Small GUI (quick mode)
+```bash
+python autoedit_gui_small.py
+```
+
 ## Windows 8.1 tutorials
 - `tutorial setup python windows 8.1 autoeditsmusicvideofor2000s.md`
 - `tutorial python windows 8.1 autoeditsmusicvideofor2000s.md`
