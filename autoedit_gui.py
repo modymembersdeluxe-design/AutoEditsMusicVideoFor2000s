@@ -174,6 +174,43 @@ def _build_audio_source(ffmpeg_path: str, ffprobe_path: str, temp_dir: Path, aud
     return str(combined), probe_duration(ffprobe_path, str(combined))
 
 
+def _layer_sfx_over_music(
+    ffmpeg_path: str,
+    ffprobe_path: str,
+    temp_dir: Path,
+    music_path: str,
+    sound_effects: List[str],
+) -> Tuple[str, float]:
+    if not sound_effects:
+        return music_path, probe_duration(ffprobe_path, music_path)
+
+    sfx_pick = random.choice(sound_effects)
+    layered = temp_dir / "audio_layered_with_sfx.mp3"
+    run_cmd(
+        [
+            ffmpeg_path,
+            "-y",
+            "-stream_loop",
+            "-1",
+            "-i",
+            sfx_pick,
+            "-i",
+            music_path,
+            "-filter_complex",
+            "[0:a]volume=0.30[sfx];[1:a][sfx]amix=inputs=2:duration=first:dropout_transition=2[mix]",
+            "-map",
+            "[mix]",
+            "-c:a",
+            "libmp3lame",
+            "-q:a",
+            "3",
+            str(layered),
+        ],
+        "Failed to layer sound source over music source.",
+    )
+    return str(layered), probe_duration(ffprobe_path, str(layered))
+
+
 def build_video_filter(settings: RenderSettings, clip_len: float) -> str:
     style = STYLE_PRESETS.get(settings.style_preset, STYLE_PRESETS["Clean 2000s"])
     filters = [
@@ -227,6 +264,7 @@ def run_auto_edit(
     settings: RenderSettings,
     intro_videos: Optional[List[str]] = None,
     outro_videos: Optional[List[str]] = None,
+    sound_sources: Optional[List[str]] = None,
 ):
     if settings.random_seed is not None:
         random.seed(settings.random_seed)
@@ -243,6 +281,13 @@ def run_auto_edit(
             temp_dir=temp_path,
             audios=audios,
             use_all_audio=settings.use_all_audio,
+        )
+        audio_path, audio_duration = _layer_sfx_over_music(
+            ffmpeg_path=ffmpeg_path,
+            ffprobe_path=ffprobe_path,
+            temp_dir=temp_path,
+            music_path=audio_path,
+            sound_effects=sound_sources or [],
         )
         bpm_hint = probe_bpm_hint(ffprobe_path, audio_path)
         beat_bpm = bpm_hint if bpm_hint else settings.bpm
@@ -450,6 +495,7 @@ class AutoEditApp(tk.Tk):
         self.outro_video_files = []
         self.outro_video_folders = []
         self.audio_files = []
+        self.sound_files = []
 
         self.ffmpeg_path = tk.StringVar(value=shutil.which("ffmpeg") or "ffmpeg")
         self.ffprobe_path = tk.StringVar(value=shutil.which("ffprobe") or "ffprobe")
@@ -532,6 +578,7 @@ class AutoEditApp(tk.Tk):
         abtn = ttk.Frame(audio_frame)
         abtn.pack(fill="x")
         ttk.Button(abtn, text="Add Multiple Audio Files", command=self._add_audio_files).pack(side="left", padx=(0, 8))
+        ttk.Button(abtn, text="Add Sound Sources", command=self._add_sound_files).pack(side="left", padx=(0, 8))
         ttk.Button(abtn, text="Clear", command=self._clear_audios).pack(side="left")
         ttk.Checkbutton(
             audio_frame,
@@ -703,6 +750,13 @@ class AutoEditApp(tk.Tk):
                 self.audio_files.append(file)
         self._refresh_audio_list()
 
+    def _add_sound_files(self):
+        files = filedialog.askopenfilenames(title="Select sound source files")
+        for file in files:
+            if Path(file).suffix.lower() in AUDIO_EXTENSIONS and file not in self.sound_files:
+                self.sound_files.append(file)
+        self._refresh_audio_list()
+
     def _add_intro_files(self):
         files = filedialog.askopenfilenames(title="Select intro video files")
         for file in files:
@@ -741,6 +795,7 @@ class AutoEditApp(tk.Tk):
 
     def _clear_audios(self):
         self.audio_files = []
+        self.sound_files = []
         self._refresh_audio_list()
 
     def _refresh_video_list(self):
@@ -753,7 +808,9 @@ class AutoEditApp(tk.Tk):
     def _refresh_audio_list(self):
         self.audio_list.delete(0, "end")
         for file in self.audio_files:
-            self.audio_list.insert("end", file)
+            self.audio_list.insert("end", f"MUSIC: {file}")
+        for file in self.sound_files:
+            self.audio_list.insert("end", f"SOUND: {file}")
 
     def _refresh_intro_list(self):
         self.intro_list.delete(0, "end")
@@ -961,6 +1018,7 @@ class AutoEditApp(tk.Tk):
         intro_videos = gather_videos(self.intro_video_files, self.intro_video_folders, recursive=self.scan_recursive.get())
         outro_videos = gather_videos(self.outro_video_files, self.outro_video_folders, recursive=self.scan_recursive.get())
         audios = [a for a in self.audio_files if Path(a).exists()]
+        sound_sources = [a for a in self.sound_files if Path(a).exists()]
         if not videos:
             messagebox.showerror("Missing Videos", "Please add at least one valid video file or folder.")
             return
@@ -993,6 +1051,7 @@ class AutoEditApp(tk.Tk):
                     settings=settings,
                     intro_videos=intro_videos,
                     outro_videos=outro_videos,
+                    sound_sources=sound_sources,
                 )
                 self.after(0, lambda output=output: self._done_success(output))
             except Exception as exc:

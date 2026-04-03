@@ -18,6 +18,7 @@ class SmallAutoEditApp(tk.Tk):
         self.video_files = []
         self.video_folders = []
         self.audio_files = []
+        self.sound_files = []
 
         self.ffmpeg_path = tk.StringVar(value=shutil.which("ffmpeg") or "ffmpeg")
         self.ffprobe_path = tk.StringVar(value=shutil.which("ffprobe") or "ffprobe")
@@ -56,6 +57,7 @@ class SmallAutoEditApp(tk.Tk):
         ttk.Button(vbtn, text="Add Video Files", command=self._add_video_files).pack(side="left", padx=(0, 6))
         ttk.Button(vbtn, text="Add Video Folder", command=self._add_video_folder).pack(side="left", padx=(0, 6))
         ttk.Button(vbtn, text="Add Audio Files", command=self._add_audio_files).pack(side="left", padx=(0, 6))
+        ttk.Button(vbtn, text="Add Sound Files", command=self._add_sound_files).pack(side="left", padx=(0, 6))
         ttk.Button(vbtn, text="Clear", command=self._clear_sources).pack(side="left")
 
         self.source_list = tk.Listbox(src, height=11)
@@ -117,10 +119,17 @@ class SmallAutoEditApp(tk.Tk):
                 self.audio_files.append(p)
         self._refresh_sources()
 
+    def _add_sound_files(self):
+        for p in filedialog.askopenfilenames(title="Select sound source files"):
+            if p not in self.sound_files:
+                self.sound_files.append(p)
+        self._refresh_sources()
+
     def _clear_sources(self):
         self.video_files = []
         self.video_folders = []
         self.audio_files = []
+        self.sound_files = []
         self._refresh_sources()
 
     def _refresh_sources(self):
@@ -131,6 +140,8 @@ class SmallAutoEditApp(tk.Tk):
             self.source_list.insert("end", f"VIDEO FOLDER: {p}")
         for p in self.audio_files:
             self.source_list.insert("end", f"AUDIO: {p}")
+        for p in self.sound_files:
+            self.source_list.insert("end", f"SOUND: {p}")
 
     def _pick_output(self):
         p = filedialog.asksaveasfilename(defaultextension=".mp4", filetypes=[("MP4", "*.mp4")], title="Output MP4")
@@ -153,6 +164,7 @@ class SmallAutoEditApp(tk.Tk):
 
         videos = gather_videos(self.video_files, self.video_folders, recursive=True)
         audios = [a for a in self.audio_files if Path(a).exists()]
+        sound_sources = [a for a in self.sound_files if Path(a).exists()]
         if not videos:
             messagebox.showerror("Missing Videos", "Add at least one video file/folder.")
             return
@@ -222,6 +234,7 @@ class SmallAutoEditApp(tk.Tk):
                     audios=audios,
                     output_file=output,
                     settings=settings,
+                    sound_sources=sound_sources,
                 )
                 self.after(0, lambda output=output: self._done_ok(output))
             except Exception as exc:

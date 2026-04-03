@@ -6,6 +6,7 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 - Add **multiple video files** and **multiple video folders**.
 - Optional recursive folder scan for large archives.
 - Add **multiple audio sources**.
+- Add **music sources** and separate **sound sources (SFX)**.
 - Audio mode:
   - random one song, or
   - combine all songs (shuffled) before muxing.
