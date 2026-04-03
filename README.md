@@ -7,6 +7,7 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 - Optional recursive folder scan for large archives.
 - Add **multiple audio sources**.
 - Add **music sources** and separate **sound sources (SFX)**.
+- Random music/SFX concat mode for automatic mashup audio beds.
 - Audio mode:
   - random one song, or
   - combine all songs (shuffled) before muxing.

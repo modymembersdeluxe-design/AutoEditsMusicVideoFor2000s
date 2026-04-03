@@ -214,6 +214,8 @@ class SmallAutoEditApp(tk.Tk):
             transition_style=self.transition_style.get(),
             trailer_mode=self.trailer_mode.get(),
             logo_path=self.logo_path.get().strip(),
+            random_music_concat_count=2,
+            random_sfx_concat_count=2,
             use_all_audio=True,
             random_seed=None,
         )

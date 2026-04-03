@@ -53,6 +53,8 @@ class RenderSettings:
     transition_style: str
     trailer_mode: str
     logo_path: str
+    random_music_concat_count: int
+    random_sfx_concat_count: int
     use_all_audio: bool
     random_seed: Optional[int]
 
@@ -174,6 +176,42 @@ def _build_audio_source(ffmpeg_path: str, ffprobe_path: str, temp_dir: Path, aud
     return str(combined), probe_duration(ffprobe_path, str(combined))
 
 
+def _concat_random_sources(ffmpeg_path: str, ffprobe_path: str, temp_dir: Path, audios: List[str], count: int, prefix: str) -> Tuple[str, float]:
+    if not audios:
+        raise ValueError("No audio sources available for random concat.")
+    if count <= 1 or len(audios) == 1:
+        pick = random.choice(audios)
+        return pick, probe_duration(ffprobe_path, pick)
+
+    picks = random.sample(audios, k=min(count, len(audios)))
+    list_file = temp_dir / f"{prefix}_random_concat.txt"
+    with list_file.open("w", encoding="utf-8") as f:
+        for path in picks:
+            norm = path.replace("\\", "/")
+            f.write(f"file '{norm}'\n")
+
+    merged = temp_dir / f"{prefix}_random_concat.mp3"
+    run_cmd(
+        [
+            ffmpeg_path,
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(list_file),
+            "-c:a",
+            "libmp3lame",
+            "-q:a",
+            "3",
+            str(merged),
+        ],
+        f"Failed random concat for {prefix} sources.",
+    )
+    return str(merged), probe_duration(ffprobe_path, str(merged))
+
+
 def _layer_sfx_over_music(
     ffmpeg_path: str,
     ffprobe_path: str,
@@ -282,12 +320,32 @@ def run_auto_edit(
             audios=audios,
             use_all_audio=settings.use_all_audio,
         )
+        if not settings.use_all_audio and settings.random_music_concat_count > 1:
+            audio_path, audio_duration = _concat_random_sources(
+                ffmpeg_path=ffmpeg_path,
+                ffprobe_path=ffprobe_path,
+                temp_dir=temp_path,
+                audios=audios,
+                count=settings.random_music_concat_count,
+                prefix="music",
+            )
+        layered_sfx = sound_sources or []
+        if layered_sfx and settings.random_sfx_concat_count > 1:
+            sfx_path, _ = _concat_random_sources(
+                ffmpeg_path=ffmpeg_path,
+                ffprobe_path=ffprobe_path,
+                temp_dir=temp_path,
+                audios=layered_sfx,
+                count=settings.random_sfx_concat_count,
+                prefix="sfx",
+            )
+            layered_sfx = [sfx_path]
         audio_path, audio_duration = _layer_sfx_over_music(
             ffmpeg_path=ffmpeg_path,
             ffprobe_path=ffprobe_path,
             temp_dir=temp_path,
             music_path=audio_path,
-            sound_effects=sound_sources or [],
+            sound_effects=layered_sfx,
         )
         bpm_hint = probe_bpm_hint(ffprobe_path, audio_path)
         beat_bpm = bpm_hint if bpm_hint else settings.bpm
@@ -532,6 +590,8 @@ class AutoEditApp(tk.Tk):
         self.transition_style = tk.StringVar(value="Fade")
         self.trailer_mode = tk.StringVar(value="Full video")
         self.logo_path = tk.StringVar(value="")
+        self.random_music_concat_count = tk.StringVar(value="1")
+        self.random_sfx_concat_count = tk.StringVar(value="1")
         self.use_all_audio = tk.BooleanVar(value=True)
         self.scan_recursive = tk.BooleanVar(value=True)
 
@@ -636,6 +696,8 @@ class AutoEditApp(tk.Tk):
         self._simple_entry(settings, "Loop %", self.loop_chance, 7, 0)
         self._simple_entry(settings, "Reverse %", self.reverse_chance, 7, 2)
         self._simple_entry(settings, "Stutter %", self.stutter_chance, 7, 4)
+        self._simple_entry(settings, "Random music concat count", self.random_music_concat_count, 8, 0)
+        self._simple_entry(settings, "Random SFX concat count", self.random_sfx_concat_count, 8, 2)
 
         ttk.Label(settings, text="Style preset").grid(row=2, column=4, sticky="w", padx=6, pady=5)
         ttk.Combobox(
@@ -873,6 +935,8 @@ class AutoEditApp(tk.Tk):
             "reverse_chance": self.reverse_chance.get(),
             "stutter_chance": self.stutter_chance.get(),
             "logo_path": self.logo_path.get(),
+            "random_music_concat_count": self.random_music_concat_count.get(),
+            "random_sfx_concat_count": self.random_sfx_concat_count.get(),
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -907,6 +971,8 @@ class AutoEditApp(tk.Tk):
             ("reverse_chance", self.reverse_chance),
             ("stutter_chance", self.stutter_chance),
             ("logo_path", self.logo_path),
+            ("random_music_concat_count", self.random_music_concat_count),
+            ("random_sfx_concat_count", self.random_sfx_concat_count),
         ]:
             if key in data:
                 var.set(str(data[key]))
@@ -971,6 +1037,10 @@ class AutoEditApp(tk.Tk):
         for label, value in {"Loop": loop_chance, "Reverse": reverse_chance, "Stutter": stutter_chance}.items():
             if value < 0 or value > 100:
                 raise ValueError(f"{label} chance must be between 0 and 100.")
+        random_music_concat_count = int(self.random_music_concat_count.get())
+        random_sfx_concat_count = int(self.random_sfx_concat_count.get())
+        if random_music_concat_count < 1 or random_sfx_concat_count < 1:
+            raise ValueError("Random concat counts must be >= 1.")
 
         seed = int(self.seed.get()) if self.seed.get().strip() else None
         return RenderSettings(
@@ -1003,6 +1073,8 @@ class AutoEditApp(tk.Tk):
             transition_style=self.transition_style.get(),
             trailer_mode=self.trailer_mode.get(),
             logo_path=self.logo_path.get().strip(),
+            random_music_concat_count=random_music_concat_count,
+            random_sfx_concat_count=random_sfx_concat_count,
             use_all_audio=self.use_all_audio.get(),
             random_seed=seed,
         )
