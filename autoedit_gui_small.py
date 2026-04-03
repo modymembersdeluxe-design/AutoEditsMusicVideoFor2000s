@@ -26,6 +26,11 @@ class SmallAutoEditApp(tk.Tk):
         self.total_clips = tk.StringVar(value="40")
         self.clip_min = tk.StringVar(value="2.0")
         self.clip_max = tk.StringVar(value="5.0")
+        self.remix_mode = tk.StringVar(value="Original")
+        self.remix_style = tk.StringVar(value="Beat remix")
+        self.transition_style = tk.StringVar(value="Fade")
+        self.trailer_mode = tk.StringVar(value="Full video")
+        self.logo_path = tk.StringVar(value="")
 
         self.status = tk.StringVar(value="Ready")
 
@@ -61,11 +66,21 @@ class SmallAutoEditApp(tk.Tk):
         self._small_entry(settings, "Total clips", self.total_clips, 0)
         self._small_entry(settings, "Clip min sec", self.clip_min, 1)
         self._small_entry(settings, "Clip max sec", self.clip_max, 2)
+        ttk.Label(settings, text="Audio remix mode").grid(row=0, column=2, sticky="w", padx=4, pady=3)
+        ttk.Combobox(settings, textvariable=self.remix_mode, values=["Original", "Nightcore", "Slow Jam", "Hyper Dance"], state="readonly", width=16).grid(row=0, column=3, sticky="w", padx=4, pady=3)
+        ttk.Label(settings, text="Auto remix style").grid(row=1, column=2, sticky="w", padx=4, pady=3)
+        ttk.Combobox(settings, textvariable=self.remix_style, values=["Chaos remix", "Beat remix", "Meme remix", "YouTube Poop", "TikTok", "AMV"], state="readonly", width=16).grid(row=1, column=3, sticky="w", padx=4, pady=3)
+        ttk.Label(settings, text="Transition FX").grid(row=2, column=2, sticky="w", padx=4, pady=3)
+        ttk.Combobox(settings, textvariable=self.transition_style, values=["Fade", "Glitch", "Warp", "RGB Split"], state="readonly", width=16).grid(row=2, column=3, sticky="w", padx=4, pady=3)
+        ttk.Label(settings, text="Trailer mode").grid(row=3, column=0, sticky="w", padx=4, pady=3)
+        ttk.Combobox(settings, textvariable=self.trailer_mode, values=["Full video", "Trailer", "Teaser"], state="readonly", width=16).grid(row=3, column=1, sticky="w", padx=4, pady=3)
 
         out = ttk.LabelFrame(root, text="Output", padding=8)
         out.pack(fill="x", pady=4)
         self._entry_row(out, "Output MP4", self.output_path, 0)
         ttk.Button(out, text="Browse", command=self._pick_output).grid(row=0, column=2, padx=4)
+        self._entry_row(out, "Logo/watermark (optional)", self.logo_path, 1)
+        ttk.Button(out, text="Browse", command=self._pick_logo).grid(row=1, column=2, padx=4)
 
         actions = ttk.Frame(root)
         actions.pack(fill="x", pady=(8, 0))
@@ -122,6 +137,11 @@ class SmallAutoEditApp(tk.Tk):
         if p:
             self.output_path.set(p)
 
+    def _pick_logo(self):
+        p = filedialog.askopenfilename(title="Logo image", filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.webp"), ("All files", "*.*")])
+        if p:
+            self.logo_path.set(p)
+
     def _generate(self):
         try:
             total = int(self.total_clips.get())
@@ -165,7 +185,7 @@ class SmallAutoEditApp(tk.Tk):
             transition_duration=0.25,
             dance_intensity=50,
             dance_mode="Auto",
-            remix_mode="Original",
+            remix_mode=self.remix_mode.get(),
             auto_beat_sync=True,
             bpm=120.0,
             instant_vfx=True,
@@ -178,6 +198,10 @@ class SmallAutoEditApp(tk.Tk):
             loop_chance=18,
             reverse_chance=8,
             stutter_chance=14,
+            remix_style=self.remix_style.get(),
+            transition_style=self.transition_style.get(),
+            trailer_mode=self.trailer_mode.get(),
+            logo_path=self.logo_path.get().strip(),
             use_all_audio=True,
             random_seed=None,
         )

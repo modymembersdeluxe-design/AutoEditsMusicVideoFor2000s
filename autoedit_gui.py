@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -48,6 +49,10 @@ class RenderSettings:
     loop_chance: int
     reverse_chance: int
     stutter_chance: int
+    remix_style: str
+    transition_style: str
+    trailer_mode: str
+    logo_path: str
     use_all_audio: bool
     random_seed: Optional[int]
 
@@ -197,10 +202,16 @@ def build_video_filter(settings: RenderSettings, clip_len: float) -> str:
         fade_out_start = max(0.0, clip_len - fade_dur)
         filters.append(f"fade=t=in:st=0:d={fade_dur:.3f}")
         filters.append(f"fade=t=out:st={fade_out_start:.3f}:d={fade_dur:.3f}")
+    elif settings.transition_style == "Glitch":
+        filters.append("tblend=all_mode=difference128")
+    elif settings.transition_style == "Warp":
+        filters.append("vignette=PI/4")
 
     if settings.instant_vfx:
         filters.append("noise=alls=6:allf=t")
         filters.append("unsharp=5:5:0.6:5:5:0.0")
+        if settings.transition_style == "RGB Split":
+            filters.append("chromashift=cbh=2:crh=-2")
         if settings.dance_mode != "Off":
             filters.append("rotate=0.007*sin(2*PI*t*4):fillcolor=black")
 
@@ -237,19 +248,40 @@ def run_auto_edit(
         beat_bpm = bpm_hint if bpm_hint else settings.bpm
         beat_len = 60.0 / max(1.0, beat_bpm)
 
-        target_duration = max(audio_duration, settings.total_clips * settings.max_clip_duration)
+        total_clips = settings.total_clips
+        min_clip = settings.min_clip_duration
+        max_clip = settings.max_clip_duration
+        auto_beat_sync = settings.auto_beat_sync
+        stutter_chance = settings.stutter_chance
+        if settings.trailer_mode == "Teaser":
+            total_clips = max(12, min(total_clips, 40))
+            max_clip = min(max_clip, 2.8)
+        elif settings.trailer_mode == "Trailer":
+            total_clips = max(20, min(total_clips, 70))
+            max_clip = min(max_clip, 3.8)
+
+        if settings.remix_style == "Chaos remix":
+            min_clip = max(0.2, min_clip * 0.7)
+            max_clip = max(0.6, max_clip * 0.85)
+        elif settings.remix_style == "Beat remix":
+            auto_beat_sync = True
+        elif settings.remix_style == "Meme remix":
+            stutter_chance = max(stutter_chance, 35)
+            max_clip = min(max_clip, 2.4)
+
+        target_duration = max(audio_duration, total_clips * max_clip)
         concat_file = temp_path / "video_concat.txt"
         segment_files = []
         src_durations: Dict[str, float] = {}
         intro_pool = intro_videos or []
         outro_pool = outro_videos or []
-        intro_count = min(settings.intro_clip_count, settings.total_clips)
-        outro_count = min(settings.outro_clip_count, max(0, settings.total_clips - intro_count))
+        intro_count = min(settings.intro_clip_count, total_clips)
+        outro_count = min(settings.outro_clip_count, max(0, total_clips - intro_count))
 
-        for idx in range(settings.total_clips):
+        for idx in range(total_clips):
             if idx < intro_count and intro_pool:
                 source_video = random.choice(intro_pool)
-            elif idx >= settings.total_clips - outro_count and outro_pool:
+            elif idx >= total_clips - outro_count and outro_pool:
                 source_video = random.choice(outro_pool)
             else:
                 source_video = random.choice(videos)
@@ -259,15 +291,15 @@ def run_auto_edit(
                 src_duration = probe_duration(ffprobe_path, source_video)
                 src_durations[source_video] = src_duration
 
-            if settings.auto_beat_sync:
+            if auto_beat_sync:
                 beats_per_cut = random.choice([1, 2, 4])
                 desired = beat_len * beats_per_cut
-                desired = max(settings.min_clip_duration, min(settings.max_clip_duration, desired))
+                desired = max(min_clip, min(max_clip, desired))
             elif settings.dance_mode == "Auto":
-                midpoint = (settings.min_clip_duration + settings.max_clip_duration) / 2.0
-                desired = random.triangular(settings.min_clip_duration, settings.max_clip_duration, midpoint * 0.75)
+                midpoint = (min_clip + max_clip) / 2.0
+                desired = random.triangular(min_clip, max_clip, midpoint * 0.75)
             else:
-                desired = random.uniform(settings.min_clip_duration, settings.max_clip_duration)
+                desired = random.uniform(min_clip, max_clip)
             clip_len = max(0.15, min(desired, src_duration if src_duration > 0 else desired))
             max_start = max(0.0, src_duration - clip_len)
             start = random.uniform(0.0, max_start) if max_start > 0 else 0.0
@@ -278,7 +310,7 @@ def run_auto_edit(
                 vf = f"{vf},setpts=PTS/{speed:.3f}"
             if random.randint(1, 100) <= settings.loop_chance:
                 vf = f"{vf},tpad=stop_mode=clone:stop_duration=0.15"
-            if random.randint(1, 100) <= settings.stutter_chance:
+            if random.randint(1, 100) <= stutter_chance:
                 vf = f"{vf},framestep=2,fps={settings.fps}"
             if random.randint(1, 100) <= settings.reverse_chance and clip_len <= 8:
                 vf = f"{vf},reverse"
@@ -337,6 +369,32 @@ def run_auto_edit(
             ],
             "Failed to stitch generated clips.",
         )
+
+        if settings.logo_path and Path(settings.logo_path).exists():
+            branded = temp_path / "stitched_branded.mp4"
+            run_cmd(
+                [
+                    ffmpeg_path,
+                    "-y",
+                    "-i",
+                    str(stitched),
+                    "-i",
+                    settings.logo_path,
+                    "-filter_complex",
+                    "overlay=W-w-20:H-h-20",
+                    "-c:v",
+                    "libx264",
+                    "-preset",
+                    "veryfast",
+                    "-crf",
+                    str(settings.crf),
+                    "-pix_fmt",
+                    "yuv420p",
+                    str(branded),
+                ],
+                "Failed to apply logo branding overlay.",
+            )
+            stitched = branded
 
         remix_af = None
         if settings.remix_mode == "Nightcore":
@@ -424,6 +482,10 @@ class AutoEditApp(tk.Tk):
         self.loop_chance = tk.StringVar(value="25")
         self.reverse_chance = tk.StringVar(value="12")
         self.stutter_chance = tk.StringVar(value="20")
+        self.remix_style = tk.StringVar(value="Beat remix")
+        self.transition_style = tk.StringVar(value="Fade")
+        self.trailer_mode = tk.StringVar(value="Full video")
+        self.logo_path = tk.StringVar(value="")
         self.use_all_audio = tk.BooleanVar(value=True)
         self.scan_recursive = tk.BooleanVar(value=True)
 
@@ -560,11 +622,41 @@ class AutoEditApp(tk.Tk):
             state="readonly",
             width=20,
         ).grid(row=4, column=3, sticky="w", padx=6, pady=5)
-        ttk.Checkbutton(settings, text="Auto speed fast+slow", variable=self.auto_speed_ramp).grid(row=6, column=4, columnspan=2, sticky="w", padx=6, pady=5)
+        ttk.Label(settings, text="Auto remix style").grid(row=5, column=4, sticky="w", padx=6, pady=5)
+        ttk.Combobox(
+            settings,
+            textvariable=self.remix_style,
+            values=["Chaos remix", "Beat remix", "Meme remix", "YouTube Poop", "TikTok", "AMV"],
+            state="readonly",
+            width=22,
+        ).grid(row=5, column=5, sticky="w", padx=6, pady=5)
+        ttk.Label(settings, text="Transition FX").grid(row=6, column=4, sticky="w", padx=6, pady=5)
+        ttk.Combobox(
+            settings,
+            textvariable=self.transition_style,
+            values=["Fade", "Glitch", "Warp", "RGB Split"],
+            state="readonly",
+            width=22,
+        ).grid(row=6, column=5, sticky="w", padx=6, pady=5)
+        ttk.Label(settings, text="Trailer mode").grid(row=7, column=4, sticky="w", padx=6, pady=5)
+        ttk.Combobox(
+            settings,
+            textvariable=self.trailer_mode,
+            values=["Full video", "Trailer", "Teaser"],
+            state="readonly",
+            width=22,
+        ).grid(row=7, column=5, sticky="w", padx=6, pady=5)
+        ttk.Checkbutton(settings, text="Auto speed fast+slow", variable=self.auto_speed_ramp).grid(row=8, column=4, columnspan=2, sticky="w", padx=6, pady=5)
 
         output_frame = ttk.LabelFrame(root, text="Output", padding=10)
         output_frame.pack(fill="x", pady=6)
         self._entry_row(output_frame, "Output MP4", self.output_path, 0, self._pick_output)
+        self._entry_row(output_frame, "Logo / watermark PNG (optional)", self.logo_path, 1, self._pick_logo)
+
+        preset_row = ttk.Frame(root)
+        preset_row.pack(fill="x", pady=(4, 0))
+        ttk.Button(preset_row, text="Save preset", command=self._save_preset).pack(side="left", padx=(0, 8))
+        ttk.Button(preset_row, text="Load preset", command=self._load_preset).pack(side="left")
 
         action_row = ttk.Frame(root)
         action_row.pack(fill="x", pady=(10, 0))
@@ -692,6 +784,77 @@ class AutoEditApp(tk.Tk):
         if path:
             self.ffprobe_path.set(path)
 
+    def _pick_logo(self):
+        path = filedialog.askopenfilename(title="Select logo/watermark image", filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.webp"), ("All files", "*.*")])
+        if path:
+            self.logo_path.set(path)
+
+    def _save_preset(self):
+        path = filedialog.asksaveasfilename(title="Save preset JSON", defaultextension=".json", filetypes=[("JSON", "*.json")])
+        if not path:
+            return
+        data = {
+            "min_clip_duration": self.min_clip_duration.get(),
+            "max_clip_duration": self.max_clip_duration.get(),
+            "total_clips": self.total_clips.get(),
+            "width": self.width.get(),
+            "height": self.height.get(),
+            "fps": self.fps.get(),
+            "crf": self.crf.get(),
+            "transition_mode": self.transition_mode.get(),
+            "transition_duration": self.transition_duration.get(),
+            "transition_style": self.transition_style.get(),
+            "remix_style": self.remix_style.get(),
+            "trailer_mode": self.trailer_mode.get(),
+            "dance_intensity": self.dance_intensity.get(),
+            "dance_mode": self.dance_mode.get(),
+            "remix_mode": self.remix_mode.get(),
+            "bpm": self.bpm.get(),
+            "speed_min": self.speed_min.get(),
+            "speed_max": self.speed_max.get(),
+            "loop_chance": self.loop_chance.get(),
+            "reverse_chance": self.reverse_chance.get(),
+            "stutter_chance": self.stutter_chance.get(),
+            "logo_path": self.logo_path.get(),
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        messagebox.showinfo("Preset saved", f"Preset saved to:\n{path}")
+
+    def _load_preset(self):
+        path = filedialog.askopenfilename(title="Load preset JSON", filetypes=[("JSON", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        for key, var in [
+            ("min_clip_duration", self.min_clip_duration),
+            ("max_clip_duration", self.max_clip_duration),
+            ("total_clips", self.total_clips),
+            ("width", self.width),
+            ("height", self.height),
+            ("fps", self.fps),
+            ("crf", self.crf),
+            ("transition_mode", self.transition_mode),
+            ("transition_duration", self.transition_duration),
+            ("transition_style", self.transition_style),
+            ("remix_style", self.remix_style),
+            ("trailer_mode", self.trailer_mode),
+            ("dance_intensity", self.dance_intensity),
+            ("dance_mode", self.dance_mode),
+            ("remix_mode", self.remix_mode),
+            ("bpm", self.bpm),
+            ("speed_min", self.speed_min),
+            ("speed_max", self.speed_max),
+            ("loop_chance", self.loop_chance),
+            ("reverse_chance", self.reverse_chance),
+            ("stutter_chance", self.stutter_chance),
+            ("logo_path", self.logo_path),
+        ]:
+            if key in data:
+                var.set(str(data[key]))
+        messagebox.showinfo("Preset loaded", f"Loaded preset:\n{path}")
+
     def _set_busy(self, busy: bool):
         if busy:
             self.progress.start(10)
@@ -726,6 +889,12 @@ class AutoEditApp(tk.Tk):
             raise ValueError("Invalid dance mode.")
         if self.remix_mode.get() not in {"Original", "Nightcore", "Slow Jam", "Hyper Dance"}:
             raise ValueError("Invalid remix mode.")
+        if self.remix_style.get() not in {"Chaos remix", "Beat remix", "Meme remix", "YouTube Poop", "TikTok", "AMV"}:
+            raise ValueError("Invalid auto remix style.")
+        if self.transition_style.get() not in {"Fade", "Glitch", "Warp", "RGB Split"}:
+            raise ValueError("Invalid transition FX style.")
+        if self.trailer_mode.get() not in {"Full video", "Trailer", "Teaser"}:
+            raise ValueError("Invalid trailer mode.")
         bpm = float(self.bpm.get())
         if bpm < 40 or bpm > 240:
             raise ValueError("BPM fallback must be between 40 and 240.")
@@ -773,6 +942,10 @@ class AutoEditApp(tk.Tk):
             loop_chance=loop_chance,
             reverse_chance=reverse_chance,
             stutter_chance=stutter_chance,
+            remix_style=self.remix_style.get(),
+            transition_style=self.transition_style.get(),
+            trailer_mode=self.trailer_mode.get(),
+            logo_path=self.logo_path.get().strip(),
             use_all_audio=self.use_all_audio.get(),
             random_seed=seed,
         )

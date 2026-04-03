@@ -25,6 +25,11 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 - Intro/Outro source pools (optional) with dedicated intro/outro clip counts.
 - Auto speed ramp (fast + slow motion variation per clip).
 - Auto loop/reverse/stutter effects with per-effect chance controls.
+- Auto trailer/teaser builder modes.
+- Channel branding preset support (logo/watermark overlay).
+- Auto remix styles: Chaos remix, Beat remix, Meme remix, YouTube Poop, TikTok, AMV.
+- Transition FX options: Fade, Glitch, Warp, RGB Split.
+- Preset save/load system (JSON templates).
 
 ## Requirements
 - Python 3.8+
@@ -33,6 +38,11 @@ Super Deluxe Python GUI for creating **longer** auto-edited 2000s nostalgia musi
 ## Run
 ```bash
 python autoedit_gui.py
+```
+
+## Normal GUI alias
+```bash
+python autoedit_gui_normal.py
 ```
 
 ## Small GUI (quick mode)
